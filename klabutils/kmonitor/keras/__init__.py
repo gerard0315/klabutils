@@ -4,6 +4,8 @@ import os
 import numpy as np
 import klabutils
 import sys
+from klabutils import util
+from klabutils import kmonitor
 from importlib import import_module
 from itertools import chain
 
@@ -68,8 +70,8 @@ def patch_tf_keras():
     if training_v2:
         old_v2 = training_v2.Loop.fit
 
-    def set_wandb_attrs(cbk, val_data):
-        if isinstance(cbk, WandbCallback):
+    def set_kmonitor_attrs(cbk, val_data):
+        if isinstance(cbk, KmonitorCallback):
             if is_generator_like(val_data):
                 cbk.generator = val_data
             elif is_dataset(val_data):
@@ -94,7 +96,7 @@ def patch_tf_keras():
         # TODO: these could be generators, why index 0?
         if val_inputs and val_targets:
             for cbk in cbks:
-                set_wandb_attrs(cbk, (val_inputs[0], val_targets[0]))
+                set_kmonitor_attrs(cbk, (val_inputs[0], val_targets[0]))
         return old_arrays(*args, **kwargs)
 
     def new_generator(*args, **kwargs):
@@ -102,7 +104,7 @@ def patch_tf_keras():
         val_data = kwargs.get("validation_data")
         if val_data:
             for cbk in cbks:
-                set_wandb_attrs(cbk, val_data)
+                set_kmonitor_attrs(cbk, val_data)
         return old_generator(*args, **kwargs)
 
     def new_v2(*args, **kwargs):
@@ -110,7 +112,7 @@ def patch_tf_keras():
         val_data = kwargs.get("validation_data")
         if val_data:
             for cbk in cbks:
-                set_wandb_attrs(cbk, val_data)
+                set_kmonitor_attrs(cbk, val_data)
         return old_v2(*args, **kwargs)
 
     training_arrays.orig_fit_loop = old_arrays
@@ -119,24 +121,24 @@ def patch_tf_keras():
     training_generator.fit_generator = new_generator
     if training_v2:
         training_v2.Loop.fit = new_v2
-        wandb.patched["keras"].append(
+        kmonitor.patched["keras"].append(
             ["tensorflow.python.keras.engine.training_v2.Loop", "fit"])
 
-    wandb.patched["keras"].append(
+    kmonitor.patched["keras"].append(
         ["tensorflow.python.keras.engine.training_arrays", "fit_loop"])
-    wandb.patched["keras"].append(
+    kmonitor.patched["keras"].append(
         ["tensorflow.python.keras.engine.training_generator", "fit_generator"])
 
 
-if "tensorflow" in wandb.util.get_full_typename(keras):
+if "tensorflow" in klabutils.util.get_full_typename(keras):
     try:
         patch_tf_keras()
     except Exception:
-        wandb.termwarn(
+        klabutils.termwarn(
             "Unable to patch tensorflow.keras for use with W&B.  You will not be able to log images unless you set the generator argument of the callback.")
 
 
-class WandbCallback(keras.callbacks.Callback):
+class KmonitorCallback(keras.callbacks.Callback):
     """WandbCallback automatically integrates keras with wandb.
 
     Example:
@@ -211,8 +213,8 @@ class WandbCallback(keras.callbacks.Callback):
                  input_type=None, output_type=None, log_evaluation=False,
                  validation_steps=None, class_colors=None, log_batch_frequency=None,
                  log_best_prefix="best_"):
-        if wandb.run is None:
-            raise wandb.Error(
+        if kmonitor.run is None:
+            raise klabutils.Error(
                 'You must call wandb.init() before WandbCallback()')
 
         self.validation_data = None
@@ -230,8 +232,8 @@ class WandbCallback(keras.callbacks.Callback):
         self.verbose = verbose
         self.save_weights_only = save_weights_only
 
-        wandb.save('model-best.h5')
-        self.filepath = os.path.join(wandb.run.dir, 'model-best.h5')
+        kmonitor.save('model-best.h5')
+        self.filepath = os.path.join(kmonitor.run.dir, 'model-best.h5')
         self.save_model = save_model
         self.log_weights = log_weights
         self.log_gradients = log_gradients
@@ -253,7 +255,7 @@ class WandbCallback(keras.callbacks.Callback):
 
         # From Keras
         if mode not in ['auto', 'min', 'max']:
-            print('WandbCallback mode %s is unknown, '
+            print('Kmonitor mode %s is unknown, '
                   'fallback to auto mode.' % (mode))
             mode = 'auto'
 
@@ -277,35 +279,35 @@ class WandbCallback(keras.callbacks.Callback):
     def set_model(self, model):
         self.model = model
         if self.input_type == 'auto' and len(model.inputs) == 1:
-            self.input_type = wandb.util.guess_data_type(model.inputs[0].shape, risky=True)
+            self.input_type = klabutils.util.guess_data_type(model.inputs[0].shape, risky=True)
         if self.input_type and self.output_type is None and len(model.outputs) == 1:
-            self.output_type = wandb.util.guess_data_type(model.outputs[0].shape)
+            self.output_type = klabutils.util.guess_data_type(model.outputs[0].shape)
 
     def on_epoch_end(self, epoch, logs={}):
         if self.log_weights:
-            wandb.log(self._log_weights(), commit=False)
+            kmonitor.log(self._log_weights(), commit=False)
 
         if self.log_gradients:
-            wandb.log(self._log_gradients(), commit=False)
+            kmonitor.log(self._log_gradients(), commit=False)
 
         if self.input_type in ("image", "images", "segmentation_mask") or self.output_type in ("image", "images", "segmentation_mask"):
             if self.generator:
                 self.validation_data = next(self.generator)
             if self.validation_data is None:
-                wandb.termwarn(
+                kmonitor.termwarn(
                     "No validation_data set, pass a generator to the callback.")
             elif self.validation_data and len(self.validation_data) > 0:
-                wandb.log({"examples": self._log_images(
+                kmonitor.log({"examples": self._log_images(
                     num_images=self.predictions)}, commit=False)
 
-        wandb.log({'epoch': epoch}, commit=False)
-        wandb.log(logs, commit=True)
+        kmonitor.log({'epoch': epoch}, commit=False)
+        kmonitor.log(logs, commit=True)
 
         self.current = logs.get(self.monitor)
         if self.current and self.monitor_op(self.current, self.best):
             if self.log_best_prefix:
-                wandb.run.summary["%s%s" % (self.log_best_prefix, self.monitor)] = self.current
-                wandb.run.summary["%s%s" % (self.log_best_prefix, "epoch")] = epoch
+                kmonitor.run.summary["%s%s" % (self.log_best_prefix, self.monitor)] = self.current
+                kmonitor.run.summary["%s%s" % (self.log_best_prefix, "epoch")] = epoch
                 if self.verbose and not self.save_model:
                     print('Epoch %05d: %s improved from %0.5f to %0.5f' % (
                         epoch, self.monitor, self.best, self.current))
@@ -321,11 +323,11 @@ class WandbCallback(keras.callbacks.Callback):
     def on_batch_end(self, batch, logs=None):
         if not self._graph_rendered:
             # Couldn't do this in train_begin because keras may still not be built
-            wandb.run.summary['graph'] = wandb.Graph.from_keras(self.model)
+            kmonitor.run.summary['graph'] = klabutils.Graph.from_keras(self.model)
             self._graph_rendered = True
 
         if self.log_batch_frequency and batch % self.log_batch_frequency == 0:
-            wandb.log(logs, commit=True)
+            kmonitor.log(logs, commit=True)
 
     def on_train_batch_begin(self, batch, logs=None):
         pass
@@ -333,11 +335,11 @@ class WandbCallback(keras.callbacks.Callback):
     def on_train_batch_end(self, batch, logs=None):
         if not self._graph_rendered:
             # Couldn't do this in train_begin because keras may still not be built
-            wandb.run.summary['graph'] = wandb.Graph.from_keras(self.model)
+            kmonitor.run.summary['graph'] = klabutils.Graph.from_keras(self.model)
             self._graph_rendered = True
 
         if self.log_batch_frequency and batch % self.log_batch_frequency == 0:
-            wandb.log(logs, commit=True)
+            kmonitor.log(logs, commit=True)
 
     def on_test_begin(self, logs=None):
         pass
@@ -356,7 +358,7 @@ class WandbCallback(keras.callbacks.Callback):
 
     def on_train_end(self, logs=None):
         if self.log_evaluation:
-            wandb.run.summary['results'] = self._log_dataframe()
+            kmonitor.run.summary['results'] = self._log_dataframe()
         pass
 
     def on_test_begin(self, logs=None):
@@ -393,7 +395,7 @@ class WandbCallback(keras.callbacks.Callback):
                             0.5 else self.labels[0] for logit in logits]
             else:
                 if len(self.labels) != 0:
-                    wandb.termwarn(
+                    klabutils.termwarn(
                         "keras model is producing a single output, so labels should be a length two array: [\"False label\", \"True label\"].")
                 captions = [logit[0] for logit in logits]
         else:
@@ -418,7 +420,7 @@ class WandbCallback(keras.callbacks.Callback):
         if len(masks[0].shape) == 2 or masks[0].shape[-1] == 1:
             return masks
         class_colors = self.class_colors if self.class_colors is not None else np.array(
-            wandb.util.class_colors(masks[0].shape[2]))
+            klabutils.util.class_colors(masks[0].shape[2]))
         imgs = class_colors[np.argmax(masks, axis=-1)]
         return imgs
 
@@ -452,11 +454,11 @@ class WandbCallback(keras.callbacks.Callback):
                 reference_image_data = self._masks_to_pixels(
                     test_output) if self.output_type == 'segmentation_mask' else test_output
                 output_images = [
-                    wandb.Image(data, caption=captions[i], grouping=2)
+                    klabutils.Image(data, caption=captions[i], grouping=2)
                     for i, data in enumerate(output_image_data)
                 ]
                 reference_images = [
-                    wandb.Image(data, caption=captions[i])
+                    klabutils.Image(data, caption=captions[i])
                     for i, data in enumerate(reference_image_data)
                 ]
                 return list(chain.from_iterable(zip(output_images, reference_images)))
@@ -465,27 +467,27 @@ class WandbCallback(keras.callbacks.Callback):
             if self.output_type == 'label':
                 # we just use the predicted label as the caption for now
                 captions = self._logits_to_captions(predictions)
-                return [wandb.Image(data, caption=captions[i]) for i, data in enumerate(test_data)]
+                return [klabutils.Image(data, caption=captions[i]) for i, data in enumerate(test_data)]
             elif self.output_type in ('image', 'images', 'segmentation_mask'):
                 output_image_data = self._masks_to_pixels(
                     predictions) if self.output_type == 'segmentation_mask' else predictions
                 reference_image_data = self._masks_to_pixels(
                     test_output) if self.output_type == 'segmentation_mask' else test_output
-                input_images = [wandb.Image(data, grouping=3) for i, data in enumerate(input_image_data)]
-                output_images = [wandb.Image(data) for i, data in enumerate(output_image_data)]
-                reference_images = [wandb.Image(data) for i, data in enumerate(reference_image_data)]
+                input_images = [klabutils.Image(data, grouping=3) for i, data in enumerate(input_image_data)]
+                output_images = [klabutils.Image(data) for i, data in enumerate(output_image_data)]
+                reference_images = [klabutils.Image(data) for i, data in enumerate(reference_image_data)]
                 return list(chain.from_iterable(zip(input_images, output_images, reference_images)))
             else:
                 # unknown output, just log the input images
-                return [wandb.Image(img) for img in test_data]
+                return [klabutils.Image(img) for img in test_data]
         elif self.output_type in ('image', 'images', 'segmentation_mask'):
             # unknown input, just log the predicted and reference outputs without captions
             output_image_data = self._masks_to_pixels(
                 predictions) if self.output_type == 'segmentation_mask' else predictions
             reference_image_data = self._masks_to_pixels(
                 test_output) if self.output_type == 'segmentation_mask' else test_output
-            output_images = [wandb.Image(data, grouping=2) for i, data in enumerate(output_image_data)]
-            reference_images = [wandb.Image(data) for i, data in enumerate(reference_image_data)]
+            output_images = [klabutils.Image(data, grouping=2) for i, data in enumerate(output_image_data)]
+            reference_images = [klabutils.Image(data) for i, data in enumerate(reference_image_data)]
             return list(chain.from_iterable(zip(output_images, reference_images)))
 
     def _log_weights(self):
@@ -494,12 +496,12 @@ class WandbCallback(keras.callbacks.Callback):
             weights = layer.get_weights()
             if len(weights) == 1:
                 metrics["parameters/" + layer.name +
-                        ".weights"] = wandb.Histogram(weights[0])
+                        ".weights"] = klabutils.Histogram(weights[0])
             elif len(weights) == 2:
                 metrics["parameters/" + layer.name +
-                        ".weights"] = wandb.Histogram(weights[0])
+                        ".weights"] = klabutils.Histogram(weights[0])
                 metrics["parameters/" + layer.name +
-                        ".bias"] = wandb.Histogram(weights[1])
+                        ".bias"] = klabutils.Histogram(weights[1])
         return metrics
 
     def _log_gradients(self):
@@ -526,7 +528,7 @@ class WandbCallback(keras.callbacks.Callback):
             target = self.model._training_endpoints[0].training_target.target
             sample_weight = self.model._training_endpoints[0].sample_weight or K.variable(1)
         else:
-            wandb.termwarn(
+            klabutils.termwarn(
                 "Couldn't extract gradients from your model, this could be an unsupported version of keras.  File an issue here: https://github.com/wandb/client", repeat=False)
             return metrics
         input_tensors = [self.model.inputs[0],  # input data
@@ -541,7 +543,7 @@ class WandbCallback(keras.callbacks.Callback):
 
         for (weight, grad) in zip(weights, grads):
             metrics["gradients/" + weight.name.split(
-                ':')[0] + ".gradient"] = wandb.Histogram(grad)
+                ':')[0] + ".gradient"] = klabutils.Histogram(grad)
 
         return metrics
 
@@ -553,7 +555,7 @@ class WandbCallback(keras.callbacks.Callback):
             y_pred = self.model.predict(x)
         elif self.generator:
             if not self.validation_steps:
-                wandb.termwarn(
+                klabutils.termwarn(
                     'when using a generator for validation data with dataframes, you must pass validation_steps. skipping')
                 return None
 
@@ -567,11 +569,11 @@ class WandbCallback(keras.callbacks.Callback):
                         y_true, by_true, axis=0), np.append(y_pred, by_pred, axis=0)
 
         if self.input_type in ('image', 'images') and self.output_type == 'label':
-            return wandb.image_categorizer_dataframe(x=x, y_true=y_true, y_pred=y_pred, labels=self.labels)
+            return klabutils.image_categorizer_dataframe(x=x, y_true=y_true, y_pred=y_pred, labels=self.labels)
         elif self.input_type in ('image', 'images') and self.output_type == 'segmentation_mask':
-            return wandb.image_segmentation_dataframe(x=x, y_true=y_true, y_pred=y_pred, labels=self.labels, class_colors=self.class_colors)
+            return klabutils.image_segmentation_dataframe(x=x, y_true=y_true, y_pred=y_pred, labels=self.labels, class_colors=self.class_colors)
         else:
-            wandb.termwarn('unknown dataframe type for input_type=%s and output_type=%s' %
+            klabutils.termwarn('unknown dataframe type for input_type=%s and output_type=%s' %
                            (self.input_type, self.output_type))
             return None
 
@@ -590,10 +592,10 @@ class WandbCallback(keras.callbacks.Callback):
         # Was getting `RuntimeError: Unable to create link` in TF 1.13.1
         # also saw `TypeError: can't pickle _thread.RLock objects`
         except (ImportError, RuntimeError, TypeError) as e:
-            wandb.termerror(
+            klabutils.termerror(
                 "Can't save model, h5py returned error: %s" % e)
             self.save_model = False
 
 
-__all__ = ['WandbCallback']
+__all__ = ['KmonitorCallback']
 

@@ -35,11 +35,20 @@ from sys import getsizeof
 from collections import namedtuple
 from importlib import import_module
 
+from .core import *
+
 import klabutils
-import klabutils.core
 
 logger = logging.getLogger(__name__)
 _not_importable = set()
+
+
+def generate_id():
+    # ~3t run ids (36**8)
+    run_gen = shortuuid.ShortUUID(alphabet=list(
+        "0123456789abcdefghijklmnopqrstuvwxyz"))
+    return run_gen.random(8)
+
 
 def get_module(name, required=None):
     """
@@ -60,6 +69,67 @@ def get_module(name, required=None):
         raise klabutils.Error(required)
 
 
+class KJSONEncoder(json.JSONEncoder):
+    """A JSON Encoder that handles some extra types."""
+
+    def default(self, obj):
+        tmp_obj, converted = json_friendly(obj)
+        tmp_obj, compressed = maybe_compress_summary(
+            tmp_obj, get_h5_typename(obj))
+        if converted:
+            return tmp_obj
+        return json.JSONEncoder.default(self, tmp_obj)
+
+
+class KHistoryJSONEncoder(json.JSONEncoder):
+    """A JSON Encoder that handles some extra types.
+    This encoder turns numpy like objects with a size > 32 into histograms"""
+
+    def default(self, obj):
+        obj, converted = json_friendly(obj)
+        obj, compressed = maybe_compress_history(obj)
+        if converted:
+            return obj
+        return json.JSONEncoder.default(self, obj)
+
+class JSONEncoderUncompressed(json.JSONEncoder):
+    """A JSON Encoder that handles some extra types.
+    This encoder turns numpy like objects with a size > 32 into histograms"""
+
+    def default(self, obj):
+        if is_numpy_array(obj):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
+
+
+def class_colors(class_count):
+    # make class 0 black, and the rest equally spaced fully saturated hues
+    return [[0, 0, 0]] + [colorsys.hsv_to_rgb(i / (class_count - 1.), 1.0, 1.0) for i in range(class_count-1)]
+
+def json_dump_safer(obj, fp, **kwargs):
+    """Convert obj to json, with some extra encodable types."""
+    return json.dump(obj, fp, cls=KJSONEncoder, **kwargs)
+
+def json_dumps_safer(obj, **kwargs):
+    """Convert obj to json, with some extra encodable types."""
+    return json.dumps(obj, cls=KJSONEncoder, **kwargs)
+
+# This is used for dumping raw json into files
+def json_dump_uncompressed(obj, fp, **kwargs):
+    """Convert obj to json, with some extra encodable types."""
+    return json.dump(obj, fp, cls=JSONEncoderUncompressed, **kwargs)
+
+def json_dumps_safer_history(obj, **kwargs):
+    """Convert obj to json, with some extra encodable types, including histograms"""
+    return json.dumps(obj, cls=KHistoryJSONEncoder, **kwargs)
+
+def make_json_if_not_number(v):
+    """If v is not a basic type convert it to json."""
+    if isinstance(v, (float, int)):
+        return v
+    return json_dumps_safer(v)
+
+
 def mkdir_exists_ok(path):
     try:
         os.makedirs(path)
@@ -69,3 +139,176 @@ def mkdir_exists_ok(path):
             return False
         else:
             raise
+
+
+def guess_data_type(shape, risky=False):
+    """Infer the type of data based on the shape of the tensors
+
+    Args:
+        risky(bool): some guesses are more likely to be wrong.
+    """
+    # (samples,) or (samples,logits)
+    if len(shape) in (1, 2):
+        return 'label'
+    # Assume image mask like fashion mnist: (no color channel)
+    # This is risky because RNNs often have 3 dim tensors: batch, time, channels
+    if risky and len(shape) == 3:
+        return 'image'
+    if len(shape) == 4:
+        if shape[-1] in (1, 3, 4):
+            # (samples, height, width, Y \ RGB \ RGBA)
+            return 'image'
+        else:
+            # (samples, height, width, logits)
+            return 'segmentation_mask'
+    return None
+
+
+def has_num(dictionary, key):
+     return (key in dictionary and isinstance(dictionary[key], numbers.Number))
+
+
+np = get_module('numpy')
+
+MAX_SLEEP_SECONDS = 60 * 5
+# TODO: Revisit these limits
+VALUE_BYTES_LIMIT = 100000
+
+
+def get_full_typename(o):
+    """We determine types based on type names so we don't have to import
+    (and therefore depend on) PyTorch, TensorFlow, etc.
+    """
+    instance_name = o.__class__.__module__ + "." + o.__class__.__name__
+    if instance_name in ["builtins.module", "__builtin__.module"]:
+        return o.__name__
+    else:
+        return instance_name
+
+
+def get_h5_typename(o):
+    typename = get_full_typename(o)
+    if is_tf_tensor_typename(typename):
+        return "tensorflow.Tensor"
+    elif is_pytorch_tensor_typename(typename):
+        return "torch.Tensor"
+    else:
+        return o.__class__.__module__.split('.')[0] + "." + o.__class__.__name__
+
+
+def is_tf_tensor(obj):
+    import tensorflow
+    return isinstance(obj, tensorflow.Tensor)
+
+
+def is_tf_tensor_typename(typename):
+    return typename.startswith('tensorflow.') and ('Tensor' in typename or 'Variable' in typename)
+
+
+def is_tf_eager_tensor_typename(typename):
+    return typename.startswith('tensorflow.') and ('EagerTensor' in typename)
+
+
+def is_pytorch_tensor(obj):
+    import torch
+    return isinstance(obj, torch.Tensor)
+
+
+def is_pytorch_tensor_typename(typename):
+    return typename.startswith('torch.') and ('Tensor' in typename or 'Variable' in typename)
+
+
+def is_pandas_data_frame_typename(typename):
+    return typename.startswith('pandas.') and 'DataFrame' in typename
+
+
+def is_matplotlib_typename(typename):
+    return typename.startswith("matplotlib.")
+
+
+def is_plotly_typename(typename):
+    return typename.startswith("plotly.")
+
+
+def is_plotly_figure_typename(typename):
+    return typename.startswith("plotly.") and typename.endswith('.Figure')
+
+
+def is_numpy_array(obj):
+    return np and isinstance(obj, np.ndarray)
+
+
+def is_pandas_data_frame(obj):
+    return is_pandas_data_frame_typename(get_full_typename(obj))
+
+
+def ensure_matplotlib_figure(obj):
+    """Extract the current figure from a matplotlib object or return the object if it's a figure.
+    raises ValueError if the object can't be converted.
+    """
+    import matplotlib
+    from matplotlib.figure import Figure
+    if obj == matplotlib.pyplot:
+        obj = obj.gcf()
+    elif not isinstance(obj, Figure):
+        if hasattr(obj, "figure"):
+            obj = obj.figure
+            # Some matplotlib objects have a figure function
+            if not isinstance(obj, Figure):
+                raise ValueError(
+                    "Only matplotlib.pyplot or matplotlib.pyplot.Figure objects are accepted.")
+    if not obj.gca().has_data():
+        raise ValueError(
+            "You attempted to log an empty plot, pass a figure directly or ensure the global plot isn't closed.")
+    return obj
+
+
+def json_friendly(obj):
+    """Convert an object into something that's more becoming of JSON"""
+    converted = True
+    typename = get_full_typename(obj)
+
+    if is_tf_eager_tensor_typename(typename):
+        obj = obj.numpy()
+    elif is_tf_tensor_typename(typename):
+        obj = obj.eval()
+    elif is_pytorch_tensor_typename(typename):
+        try:
+            if obj.requires_grad:
+                obj = obj.detach()
+        except AttributeError:
+            pass  # before 0.4 is only present on variables
+
+        try:
+            obj = obj.data
+        except RuntimeError:
+            pass  # happens for Tensors before 0.4
+
+        if obj.size():
+            obj = obj.numpy()
+        else:
+            return obj.item(), True
+
+    if is_numpy_array(obj):
+        if obj.size == 1:
+            obj = obj.flatten()[0]
+        elif obj.size <= 32:
+            obj = obj.tolist()
+    elif np and isinstance(obj, np.generic):
+        obj = obj.item()
+    elif isinstance(obj, bytes):
+        obj = obj.decode('utf-8')
+    elif isinstance(obj, (datetime, date)):
+        obj = obj.isoformat()
+    else:
+        converted = False
+    if getsizeof(obj) > VALUE_BYTES_LIMIT:
+        klabutils.termwarn("Serializing object of type {} that is {} bytes".format(type(obj).__name__, getsizeof(obj)))
+
+    return obj, converted
+        
+
+def to_forward_slash_path(path):
+    if platform.system() == "Windows":
+        path = path.replace("\\", "/")
+    return path

@@ -31,5 +31,21 @@ from importlib import import_module
 # from . import io_wrap
 from .core import *
 
+from klabutils import util
+from klabutils.data_types import Image
+from klabutils.data_types import Video
+from klabutils.data_types import Audio
+from klabutils.data_types import Table
+from klabutils.data_types import Html
+from klabutils.data_types import Object3D
+from klabutils.data_types import Molecule
+from klabutils.data_types import Histogram
+from klabutils.data_types import Graph
+
+from klabutils.dataframes import image_categorizer_dataframe
+from klabutils.dataframes import image_segmentation_dataframe
+from klabutils.dataframes import image_segmentation_binary_dataframe
+from klabutils.dataframes import image_segmentation_multiclass_dataframe
+
 def test_func():
   print(" tested !")
