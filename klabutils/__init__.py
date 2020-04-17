@@ -41,11 +41,15 @@ from klabutils.data_types import Object3D
 from klabutils.data_types import Molecule
 from klabutils.data_types import Histogram
 from klabutils.data_types import Graph
-
+from klabutils import trigger
 from klabutils.dataframes import image_categorizer_dataframe
 from klabutils.dataframes import image_segmentation_dataframe
 from klabutils.dataframes import image_segmentation_binary_dataframe
 from klabutils.dataframes import image_segmentation_multiclass_dataframe
+
+from klabutils import kmonitor
+from klabutils.kmonitor import run_manager
+from klabutils.kmonitor.run_manager import LaunchError, Process
 
 def test_func():
   print(" tested !")

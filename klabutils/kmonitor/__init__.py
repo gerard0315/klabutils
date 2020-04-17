@@ -34,6 +34,10 @@ from .. import io_wrap
 from ..core import *
 
 from klabutils import util
+from klabutils import trigger
+from klabutils import kmonitor
+from klabutils.kmonitor import run_manager
+from klabutils.kmonitor.run_manager import LaunchError, Process
 
 _shutdown_async_log_thread_wait_time = 20
 
@@ -172,6 +176,28 @@ def log(row=None, commit=None, step=None, sync=True, *args, **kwargs):
             "You must call `wandb.init` in the same process before calling log")
 
     run.log(row, commit, step, sync, *args, **kwargs)
+
+
+def reset_env(exclude=[]):
+    """Remove environment variables, used in Jupyter notebooks"""
+    if os.getenv(env.INITED):
+        kmonitor_keys = [key for key in os.environ.keys() if key.startswith(
+            'WANDB_') and key not in exclude]
+        for key in kmonitor_keys:
+            del os.environ[key]
+        return True
+    else:
+        return False
+
+
+def _get_python_type():
+    try:
+        if 'terminal' in get_ipython().__module__:
+            return 'ipython'
+        else:
+            return 'jupyter'
+    except (NameError, AttributeError):
+        return "python"
 
 
 def init(job_type=None, dir=None, config=None, project=None, entity=None, reinit=None, tags=None,

@@ -69,6 +69,40 @@ def get_module(name, required=None):
         raise klabutils.Error(required)
 
 
+def parse_tfjob_config():
+    """Attempts to parse TFJob config, returning False if it can't find it"""
+    if os.getenv("TF_CONFIG"):
+        try:
+            return json.loads(os.environ["TF_CONFIG"])
+        except ValueError:
+            return False
+    else:
+        return False
+
+
+def parse_sm_config():
+    """Attempts to parse SageMaker configuration returning False if it can't find it"""
+    sagemaker_config = "/opt/ml/input/config/hyperparameters.json"
+    resource_config = "/opt/ml/input/config/resourceconfig.json"
+    if os.path.exists(sagemaker_config) and os.path.exists(resource_config):
+        conf = {}
+        conf["sagemaker_training_job_name"] = os.getenv('TRAINING_JOB_NAME')
+        # Hyper-parameter searchs quote configs...
+        for k, v in six.iteritems(json.load(open(sagemaker_config))):
+            cast = v.strip('"')
+            if os.getenv("WANDB_API_KEY") is None and k == "wandb_api_key":
+                os.environ["WANDB_API_KEY"] = cast
+            else:
+                if re.match(r'^[-\d]+$', cast):
+                    cast = int(cast)
+                elif re.match(r'^[-.\d]+$', cast):
+                    cast = float(cast)
+                conf[k] = cast
+        return conf
+    else:
+        return False
+
+
 class KJSONEncoder(json.JSONEncoder):
     """A JSON Encoder that handles some extra types."""
 
@@ -312,3 +346,50 @@ def to_forward_slash_path(path):
     if platform.system() == "Windows":
         path = path.replace("\\", "/")
     return path
+
+
+def maybe_compress_history(obj):
+    if np and isinstance(obj, np.ndarray) and obj.size > 32:
+        return klabutils.Histogram(obj, num_bins=32).to_json(), True
+    else:
+        return obj, False
+
+
+def maybe_compress_summary(obj, h5_typename):
+    if np and isinstance(obj, np.ndarray) and obj.size > 32:
+        return {
+            "_type": h5_typename,  # may not be ndarray
+            "var": np.var(obj).item(),
+            "mean": np.mean(obj).item(),
+            "min": np.amin(obj).item(),
+            "max": np.amax(obj).item(),
+            "10%": np.percentile(obj, 10),
+            "25%": np.percentile(obj, 25),
+            "75%": np.percentile(obj, 75),
+            "90%": np.percentile(obj, 90),
+            "size": obj.size
+        }, True
+    else:
+        return obj, False
+
+
+def image_id_from_k8s():
+    """Pings the k8s metadata service for the image id"""
+    token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    if os.path.exists(token_path):
+        k8s_server = "https://{}:{}/api/v1/namespaces/default/pods/{}".format(
+            os.getenv("KUBERNETES_SERVICE_HOST"), os.getenv(
+                "KUBERNETES_PORT_443_TCP_PORT"), os.getenv("HOSTNAME")
+        )
+        try:
+            res = requests.get(k8s_server, verify="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+                               timeout=3, headers={"Authorization": "Bearer {}".format(open(token_path).read())})
+            res.raise_for_status()
+        except requests.RequestException:
+            return None
+        try:
+            return res.json()["status"]["containerStatuses"][0]["imageID"].strip("docker-pullable://")
+        except (ValueError, KeyError, IndexError):
+            logger.exception("Error checking kubernetes for image id")
+            return None
+            

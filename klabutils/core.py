@@ -15,6 +15,13 @@ import click
 from . import env
 from . import io_wrap
 
+
+LOG_STRING = click.style('wandb', fg='blue', bold=True)
+ERROR_STRING = click.style('ERROR', bg='red', fg='green')
+WARN_STRING = click.style('WARNING', fg='yellow')
+PRINTED_MESSAGES = set()
+
+
 # We use the hidden version if it already exists, otherwise non-hidden.
 if os.path.exists(os.path.join(env.get_dir(os.getcwd()), '.klabuils')):
     __stage_dir__ = '.klabuils' + os.sep
