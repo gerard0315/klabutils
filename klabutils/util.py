@@ -42,6 +42,8 @@ import klabutils
 logger = logging.getLogger(__name__)
 _not_importable = set()
 
+def nano_time():
+  return int(time.time() * 1000)
 
 def generate_id():
     # ~3t run ids (36**8)

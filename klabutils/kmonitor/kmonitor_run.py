@@ -55,7 +55,7 @@ class Monitor:
 
 
   def log_step(self, step=-1, loss=999, acc=0, prefix=LOGS_DEFAULT):
-    self._logs[prefix].append({STEP_: step, prefix+LOSS_: loss, prefix+ACC_: acc, TIMESTAMP_: nano_time()})
+    self._logs[prefix].append({STEP_: step, prefix+LOSS_: loss, prefix+ACC_: acc, TIMESTAMP_: util.nano_time()})
 
   def upload_logs(self):
     # upload to s3
