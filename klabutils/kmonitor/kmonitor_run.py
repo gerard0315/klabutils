@@ -39,7 +39,7 @@ PROJECT_ID = 'PROJECT_ID'
 MODEL_VERSION = 'MODEL_VERSION'
 EXPERIMENT_ID = 'EXPERIMENT_ID' 
 
-class Monitor:
+class Run:
   '''
     member variable用camelCase, function用underscore
   ''' 
