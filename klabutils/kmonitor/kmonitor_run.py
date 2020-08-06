@@ -34,7 +34,7 @@ LOGS_DEFAULT = ''
 LOGS_VAL = 'val_'
 LOGS_TRAIN = 'train_'
 
-# environmental
+# environmental 
 PROJECT_ID = 'PROJECT_ID'
 MODEL_VERSION = 'MODEL_VERSION'
 EXPERIMENT_ID = 'EXPERIMENT_ID' 
