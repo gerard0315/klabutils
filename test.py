@@ -3,3 +3,4 @@ from klabutils import kmonitor
 from klabutils.kmonitor import keras
 
 kmonitor.init()
+print('test')
